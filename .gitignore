@@ -127,12 +127,15 @@ supabase/.temp/
 !**/mipmap*/*.png
 !screenshots/*.png
 
-# Build logs
+# Build logs and dev artifacts
 build_*.txt
 *_log.txt
 crash_*.txt
 full_log*.txt
 install_*.txt
+final_build_attempt*.txt
+final_verification_build*.txt
+app_crash*.txt
 
 # Window dumps
 window_dump*.xml

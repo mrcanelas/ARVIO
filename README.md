@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="screenshots/banner.png" alt="ARVIO" width="400"/>
+</p>
+
 # ARVIO - Media Hub for Android TV
 
 A media hub application for Android TV with a modern, beautiful interface. Browse your media library, discover content, and play videos from your configured sources.

@@ -1,12 +1,12 @@
 # ARVIO - Media Hub for Android TV
 
-A media hub application for Android TV with a Netflix-style interface. Browse your media library, discover content, and play videos from your configured sources.
+A media hub application for Android TV with a modern, beautiful interface. Browse your media library, discover content, and play videos from your configured sources.
 
 ## Features
 
 - **Stremio Addon Support** - Connect your favorite Stremio addons
 - **Media Browser** - Browse and discover content with TMDB metadata
-- **Netflix-style UI** - Horizontal row browsing optimized for D-pad/remote
+- **Beautiful UI** - Modern horizontal row browsing optimized for D-pad/remote
 - **Video Playback** - 4K/HDR/DTS/Atmos support via ExoPlayer
 - **Trakt.tv Integration** - Sync watch history across devices
 - **Cloud Watchlist** - Save items to watch later

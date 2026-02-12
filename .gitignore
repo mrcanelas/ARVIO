@@ -92,6 +92,9 @@ upload.keystore
 *.swp
 *~
 
+# Internal planning artifacts (not needed for OSS runtime/build)
+.planning/
+
 # Mac files
 .DS_Store
 

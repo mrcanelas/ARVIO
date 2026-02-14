@@ -54,21 +54,6 @@ Powered by **ExoPlayer (Media3)** with **FFmpeg extension** for broad codec supp
 ### Direct Download
 [Download APK](https://github.com/ProdigyV21/ARVIO/releases/latest) from the Releases page.
 
-## Supabase Setup (Cloud Account Sync)
-
-Cloud sign-in/sync uses Supabase Edge Functions and one DB migration.
-
-1. Apply migration:
-`supabase/migrations/20260211_tv_auth_and_account_sync.sql`
-2. Deploy functions:
-`supabase/functions/tv-auth-start`
-`supabase/functions/tv-auth-status`
-`supabase/functions/tv-auth-complete`
-3. Configure function secrets:
-`SUPABASE_URL`
-`SUPABASE_SERVICE_ROLE_KEY`
-`APP_ANON_KEY` (same value as app `SUPABASE_ANON_KEY`)
-
 ## Support
 
 If ARVIO helps you, donations are always appreciated:

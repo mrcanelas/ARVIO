@@ -9,12 +9,16 @@ import androidx.lifecycle.viewModelScope
 import com.arflix.tv.data.api.TraktDeviceCode
 import com.arflix.tv.data.model.Addon
 import com.arflix.tv.data.model.CatalogConfig
+import com.arflix.tv.data.model.Profile
 import com.arflix.tv.data.repository.AuthRepository
 import com.arflix.tv.data.repository.AuthState
 import com.arflix.tv.data.repository.CatalogRepository
 import com.arflix.tv.data.repository.IptvRepository
 import com.arflix.tv.data.repository.MediaRepository
+import com.arflix.tv.data.repository.ProfileRepository
 import com.arflix.tv.data.repository.StreamRepository
+import com.arflix.tv.data.repository.TvDeviceAuthRepository
+import com.arflix.tv.data.repository.TvDeviceAuthStatusType
 import com.arflix.tv.data.repository.TraktRepository
 import com.arflix.tv.data.repository.TraktSyncService
 import com.arflix.tv.data.repository.SyncProgress
@@ -32,6 +36,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import javax.inject.Inject
 
 enum class ToastType {
@@ -45,6 +51,8 @@ data class SettingsUiState(
     val includeSpecials: Boolean = false,
     val isLoggedIn: Boolean = false,
     val accountEmail: String? = null,
+    val showCloudEmailPasswordDialog: Boolean = false,
+    val isCloudAuthWorking: Boolean = false,
     // Trakt
     val isTraktAuthenticated: Boolean = false,
     val traktCode: TraktDeviceCode? = null,
@@ -84,6 +92,8 @@ class SettingsViewModel @Inject constructor(
     private val catalogRepository: CatalogRepository,
     private val iptvRepository: IptvRepository,
     private val authRepository: AuthRepository,
+    private val profileRepository: ProfileRepository,
+    private val tvDeviceAuthRepository: TvDeviceAuthRepository,
     private val traktSyncService: TraktSyncService
 ) : ViewModel() {
 
@@ -99,6 +109,9 @@ class SettingsViewModel @Inject constructor(
 
     private var traktPollingJob: Job? = null
     private var iptvLoadJob: Job? = null
+    private var lastCloudSyncedUserId: String? = null
+    private var cloudDeviceCode: String? = null
+    private var cloudUserCode: String? = null
 
     init {
         loadSettings()
@@ -292,6 +305,7 @@ class SettingsViewModel @Inject constructor(
 
             // Sync to cloud
             authRepository.saveDefaultSubtitleToProfile(language)
+            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -342,6 +356,7 @@ class SettingsViewModel @Inject constructor(
 
             // Sync to cloud
             authRepository.saveAutoPlayNextToProfile(enabled)
+            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -351,6 +366,7 @@ class SettingsViewModel @Inject constructor(
                 prefs[INCLUDE_SPECIALS_KEY] = enabled
             }
             _uiState.value = _uiState.value.copy(includeSpecials = enabled)
+            syncLocalStateToCloud(silent = true)
         }
     }
     
@@ -359,6 +375,7 @@ class SettingsViewModel @Inject constructor(
     fun toggleAddon(addonId: String) {
         viewModelScope.launch {
             streamRepository.toggleAddon(addonId)
+            syncLocalStateToCloud(silent = true)
         }
     }
     
@@ -374,6 +391,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Added ${addon.name}",
                     toastType = ToastType.SUCCESS
                 )
+                syncLocalStateToCloud(silent = true)
             }.onFailure { _ ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = "Failed to add addon",
@@ -388,10 +406,20 @@ class SettingsViewModel @Inject constructor(
             authRepository.authState.collect { state ->
                 val isLoggedIn = state is AuthState.Authenticated
                 val email = (state as? AuthState.Authenticated)?.email
+                val userId = (state as? AuthState.Authenticated)?.userId
                 _uiState.value = _uiState.value.copy(
                     isLoggedIn = isLoggedIn,
                     accountEmail = email
                 )
+                if (!userId.isNullOrBlank() && lastCloudSyncedUserId != userId) {
+                    lastCloudSyncedUserId = userId
+                    syncCloudStateToLocal(silent = true)
+                    // Ensure there's always at least one cloud snapshot row after first sign-in.
+                    // This avoids a UX issue where cloud sync looks connected but nothing exists server-side yet.
+                    syncLocalStateToCloud(silent = true, force = true)
+                } else if (!isLoggedIn) {
+                    lastCloudSyncedUserId = null
+                }
             }
         }
     }
@@ -450,6 +478,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Added ${catalog.title}",
                     toastType = ToastType.SUCCESS
                 )
+                syncLocalStateToCloud(silent = true)
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message ?: "Failed to add catalog",
@@ -467,6 +496,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Updated ${catalog.title}",
                     toastType = ToastType.SUCCESS
                 )
+                syncLocalStateToCloud(silent = true)
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message ?: "Failed to update catalog",
@@ -484,6 +514,7 @@ class SettingsViewModel @Inject constructor(
                     toastMessage = "Catalog removed",
                     toastType = ToastType.SUCCESS
                 )
+                syncLocalStateToCloud(silent = true)
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     toastMessage = error.message ?: "Failed to remove catalog",
@@ -496,12 +527,14 @@ class SettingsViewModel @Inject constructor(
     fun moveCatalogUp(catalogId: String) {
         viewModelScope.launch {
             catalogRepository.moveCatalogUp(catalogId)
+            syncLocalStateToCloud(silent = true)
         }
     }
 
     fun moveCatalogDown(catalogId: String) {
         viewModelScope.launch {
             catalogRepository.moveCatalogDown(catalogId)
+            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -521,6 +554,7 @@ class SettingsViewModel @Inject constructor(
             lastObservedIptvM3u = trimmedM3u
             iptvRepository.saveConfig(trimmedM3u, trimmedEpg)
             refreshIptv(showToast = true, configured = true)
+            syncLocalStateToCloud(silent = true)
         }
     }
 
@@ -592,12 +626,257 @@ class SettingsViewModel @Inject constructor(
                 toastMessage = "IPTV playlist removed",
                 toastType = ToastType.SUCCESS
             )
+            syncLocalStateToCloud(silent = true)
         }
     }
     
     fun removeAddon(addonId: String) {
         viewModelScope.launch {
             streamRepository.removeAddon(addonId)
+            syncLocalStateToCloud(silent = true)
+        }
+    }
+
+    fun startCloudAuth() {
+        if (_uiState.value.isLoggedIn || _uiState.value.isCloudAuthWorking) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isCloudAuthWorking = true)
+            tvDeviceAuthRepository.startSession()
+                .onSuccess { session ->
+                    cloudDeviceCode = session.deviceCode
+                    cloudUserCode = session.userCode
+                    _uiState.value = _uiState.value.copy(
+                        isCloudAuthWorking = false,
+                        showCloudEmailPasswordDialog = true
+                    )
+                }
+                .onFailure { error ->
+                    cloudDeviceCode = null
+                    cloudUserCode = null
+                    _uiState.value = _uiState.value.copy(
+                        isCloudAuthWorking = false,
+                        toastMessage = error.message ?: "Failed to start cloud login",
+                        toastType = ToastType.ERROR
+                    )
+                }
+        }
+    }
+
+    fun cancelCloudAuth() {
+        cloudDeviceCode = null
+        cloudUserCode = null
+        _uiState.value = _uiState.value.copy(
+            showCloudEmailPasswordDialog = false,
+            isCloudAuthWorking = false
+        )
+    }
+
+    fun openCloudEmailPasswordDialog() {
+        if (_uiState.value.isLoggedIn) return
+        startCloudAuth()
+    }
+
+    fun closeCloudEmailPasswordDialog() {
+        _uiState.value = _uiState.value.copy(showCloudEmailPasswordDialog = false)
+    }
+
+    fun completeCloudAuthWithEmailPassword(
+        email: String,
+        password: String,
+        createAccount: Boolean
+    ) {
+        val deviceCode = cloudDeviceCode ?: return
+        val userCode = cloudUserCode ?: return
+        val trimmedEmail = email.trim()
+        if (trimmedEmail.isBlank() || password.isBlank()) return
+
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isCloudAuthWorking = true)
+            tvDeviceAuthRepository.completeWithEmailPassword(
+                userCode = userCode,
+                email = trimmedEmail,
+                password = password,
+                intent = if (createAccount) "signup" else "signin"
+            ).onSuccess {
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = "Signing in...",
+                    toastType = ToastType.INFO,
+                    showCloudEmailPasswordDialog = false,
+                    isCloudAuthWorking = true
+                )
+                val deadline = System.currentTimeMillis() + 30_000L
+                while (System.currentTimeMillis() < deadline) {
+                    val status = tvDeviceAuthRepository.pollStatus(deviceCode).getOrNull()
+                    when (status?.status) {
+                        TvDeviceAuthStatusType.APPROVED -> {
+                            val access = status.accessToken
+                            val refresh = status.refreshToken
+                            if (!access.isNullOrBlank() && !refresh.isNullOrBlank()) {
+                                authRepository.signInWithSessionTokens(access, refresh)
+                                    .onSuccess {
+                                        cloudDeviceCode = null
+                                        cloudUserCode = null
+                                        _uiState.value = _uiState.value.copy(
+                                            isCloudAuthWorking = false,
+                                            toastMessage = "Signed in successfully",
+                                            toastType = ToastType.SUCCESS
+                                        )
+                                        syncCloudStateToLocal(silent = true)
+                                        syncLocalStateToCloud(silent = true)
+                                        return@launch
+                                    }
+                            }
+                            break
+                        }
+                        TvDeviceAuthStatusType.EXPIRED -> break
+                        TvDeviceAuthStatusType.ERROR -> break
+                        else -> Unit
+                    }
+                    delay(800)
+                }
+
+                _uiState.value = _uiState.value.copy(
+                    isCloudAuthWorking = false,
+                    toastMessage = "Sign-in did not complete. Try again.",
+                    toastType = ToastType.ERROR
+                )
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = error.message ?: "Failed to link TV",
+                    toastType = ToastType.ERROR,
+                    isCloudAuthWorking = false
+                )
+            }
+        }
+    }
+
+    private suspend fun buildCloudSnapshotJson(): String {
+        val prefs = context.settingsDataStore.data.first()
+        val root = JSONObject()
+        root.put("version", 1)
+        root.put("updatedAt", System.currentTimeMillis())
+        root.put("defaultSubtitle", prefs[DEFAULT_SUBTITLE_KEY] ?: _uiState.value.defaultSubtitle)
+        root.put("autoPlayNext", prefs[AUTO_PLAY_NEXT_KEY] ?: _uiState.value.autoPlayNext)
+        root.put("includeSpecials", prefs[INCLUDE_SPECIALS_KEY] ?: _uiState.value.includeSpecials)
+        root.put("activeProfileId", profileRepository.getActiveProfileId() ?: JSONObject.NULL)
+        root.put("profiles", JSONArray(gson.toJson(profileRepository.getProfiles())))
+        // Trakt tokens are profile-scoped. Store a map keyed by profileId.
+        val profiles = profileRepository.getProfiles()
+        val traktTokens = traktRepository.exportTokensForProfiles(profiles.map { it.id })
+        root.put("traktTokens", JSONObject(gson.toJson(traktTokens)))
+        root.put("addons", JSONArray(gson.toJson(streamRepository.installedAddons.first())))
+        root.put("catalogs", JSONArray(gson.toJson(catalogRepository.getCatalogs())))
+        val iptvConfig = iptvRepository.observeConfig().first()
+        root.put("iptvM3uUrl", iptvConfig.m3uUrl)
+        root.put("iptvEpgUrl", iptvConfig.epgUrl)
+        root.put("iptvFavoriteGroups", JSONArray(gson.toJson(iptvRepository.observeFavoriteGroups().first())))
+        root.put("traktLinked", _uiState.value.isTraktAuthenticated)
+        root.put("traktExpiration", _uiState.value.traktExpiration ?: JSONObject.NULL)
+        return root.toString()
+    }
+
+    fun syncLocalStateToCloud(silent: Boolean = false, force: Boolean = false) {
+        if (!force && !_uiState.value.isLoggedIn) return
+        if (authRepository.getCurrentUserId().isNullOrBlank()) return
+        viewModelScope.launch {
+            val payload = runCatching { buildCloudSnapshotJson() }.getOrNull() ?: return@launch
+            val result = authRepository.saveAccountSyncPayload(payload)
+            if (!silent && result.isSuccess) {
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = "Cloud sync complete",
+                    toastType = ToastType.SUCCESS
+                )
+            } else if (!silent && result.isFailure) {
+                _uiState.value = _uiState.value.copy(
+                    toastMessage = result.exceptionOrNull()?.message ?: "Cloud sync failed",
+                    toastType = ToastType.ERROR
+                )
+            }
+        }
+    }
+
+    fun syncCloudStateToLocal(silent: Boolean = false) {
+        if (!_uiState.value.isLoggedIn) return
+        viewModelScope.launch {
+            val payload = authRepository.loadAccountSyncPayload().getOrNull().orEmpty()
+            if (payload.isBlank()) {
+                if (!silent) {
+                    _uiState.value = _uiState.value.copy(
+                        toastMessage = "No cloud backup found",
+                        toastType = ToastType.INFO
+                    )
+                }
+                return@launch
+            }
+            runCatching {
+                val root = JSONObject(payload)
+                val defaultSubtitle = root.optString("defaultSubtitle", _uiState.value.defaultSubtitle)
+                val autoPlayNext = root.optBoolean("autoPlayNext", _uiState.value.autoPlayNext)
+                val includeSpecials = root.optBoolean("includeSpecials", _uiState.value.includeSpecials)
+                context.settingsDataStore.edit { prefs ->
+                    prefs[DEFAULT_SUBTITLE_KEY] = defaultSubtitle
+                    prefs[AUTO_PLAY_NEXT_KEY] = autoPlayNext
+                    prefs[INCLUDE_SPECIALS_KEY] = includeSpecials
+                }
+                authRepository.saveDefaultSubtitleToProfile(defaultSubtitle)
+                authRepository.saveAutoPlayNextToProfile(autoPlayNext)
+
+                root.optJSONArray("profiles")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
+                    val type = object : TypeToken<List<Profile>>() {}.type
+                    val profiles: List<Profile> = gson.fromJson(json, type) ?: emptyList()
+                    val activeProfileId = root.optString("activeProfileId").ifBlank { null }
+                    if (profiles.isNotEmpty()) {
+                        profileRepository.replaceProfilesFromCloud(profiles, activeProfileId)
+                    }
+                }
+                // Import Trakt tokens AFTER profiles are restored.
+                root.optJSONObject("traktTokens")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
+                    val type = object : TypeToken<Map<String, TraktRepository.CloudTraktToken>>() {}.type
+                    val tokens: Map<String, TraktRepository.CloudTraktToken> = gson.fromJson(json, type) ?: emptyMap()
+                    traktRepository.importTokensForProfiles(tokens)
+                }
+                root.optJSONArray("addons")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
+                    val type = object : TypeToken<List<Addon>>() {}.type
+                    val addons: List<Addon> = gson.fromJson(json, type) ?: emptyList()
+                    if (addons.isNotEmpty()) {
+                        streamRepository.replaceAddonsFromCloud(addons)
+                    }
+                }
+                root.optJSONArray("catalogs")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
+                    val type = object : TypeToken<List<CatalogConfig>>() {}.type
+                    val catalogs: List<CatalogConfig> = gson.fromJson(json, type) ?: emptyList()
+                    if (catalogs.isNotEmpty()) {
+                        catalogRepository.replaceCatalogsForActiveProfile(catalogs)
+                    }
+                }
+                val m3u = root.optString("iptvM3uUrl")
+                val epg = root.optString("iptvEpgUrl")
+                val favorites = root.optJSONArray("iptvFavoriteGroups")?.toString().orEmpty().let { json ->
+                    if (json.isBlank()) emptyList() else {
+                        val type = object : TypeToken<List<String>>() {}.type
+                        gson.fromJson<List<String>>(json, type) ?: emptyList()
+                    }
+                }
+                iptvRepository.importCloudConfig(m3u, epg, favorites)
+                if (m3u.isNotBlank()) {
+                    refreshIptv(showToast = false, configured = false)
+                }
+            }.onSuccess {
+                loadSettings()
+                if (!silent) {
+                    _uiState.value = _uiState.value.copy(
+                        toastMessage = "Cloud restore complete",
+                        toastType = ToastType.SUCCESS
+                    )
+                }
+            }.onFailure { error ->
+                if (!silent) {
+                    _uiState.value = _uiState.value.copy(
+                        toastMessage = error.message ?: "Cloud restore failed",
+                        toastType = ToastType.ERROR
+                    )
+                }
+            }
         }
     }
     
@@ -647,6 +926,7 @@ class SettingsViewModel @Inject constructor(
                         toastType = ToastType.SUCCESS
                     )
                     performFullSync(silent = true)
+                    syncLocalStateToCloud(silent = true, force = true)
                     return@launch
                 } catch (e: Exception) {
                     // Keep polling on 400 (pending) - user hasn't entered code yet
@@ -688,6 +968,7 @@ class SettingsViewModel @Inject constructor(
                 toastMessage = "Trakt disconnected",
                 toastType = ToastType.SUCCESS
             )
+            syncLocalStateToCloud(silent = true, force = true)
         }
     }
     
@@ -697,6 +978,7 @@ class SettingsViewModel @Inject constructor(
 
     fun logout() {
         viewModelScope.launch {
+            cancelCloudAuth()
             authRepository.signOut()
             _uiState.value = _uiState.value.copy(
                 toastMessage = "Signed out",

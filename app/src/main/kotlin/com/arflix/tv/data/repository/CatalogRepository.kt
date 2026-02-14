@@ -234,6 +234,18 @@ class CatalogRepository @Inject constructor(
         return true
     }
 
+    suspend fun replaceCatalogsForActiveProfile(catalogs: List<CatalogConfig>) {
+        val sanitized = catalogs
+            .distinctBy { it.id }
+            .map { cfg ->
+                val looksCustom = cfg.id.startsWith("custom_") ||
+                    !cfg.sourceUrl.isNullOrBlank() ||
+                    !cfg.sourceRef.isNullOrBlank()
+                if (looksCustom) cfg.copy(isPreinstalled = false) else cfg
+            }
+        saveCatalogs(sanitized)
+    }
+
     fun validateCatalogUrl(rawUrl: String): CatalogValidationResult {
         val normalized = CatalogUrlParser.normalize(rawUrl)
         if (normalized.isBlank()) {

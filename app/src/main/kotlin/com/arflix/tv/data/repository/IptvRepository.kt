@@ -138,6 +138,35 @@ class IptvRepository @Inject constructor(
         runCatching { cacheFile().delete() }
     }
 
+    suspend fun importCloudConfig(
+        m3uUrl: String,
+        epgUrl: String,
+        favoriteGroups: List<String>
+    ) {
+        context.settingsDataStore.edit { prefs ->
+            if (m3uUrl.isBlank()) {
+                prefs.remove(m3uUrlKey())
+            } else {
+                prefs[m3uUrlKey()] = encryptConfigValue(m3uUrl)
+            }
+            if (epgUrl.isBlank()) {
+                prefs.remove(epgUrlKey())
+            } else {
+                prefs[epgUrlKey()] = encryptConfigValue(epgUrl)
+            }
+            val cleanedFavorites = favoriteGroups
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+            if (cleanedFavorites.isEmpty()) {
+                prefs.remove(favoriteGroupsKey())
+            } else {
+                prefs[favoriteGroupsKey()] = gson.toJson(cleanedFavorites)
+            }
+        }
+        invalidateCache()
+    }
+
     suspend fun toggleFavoriteGroup(groupName: String) {
         val trimmed = groupName.trim()
         if (trimmed.isEmpty()) return

@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+- (Nothing yet)
+
+## [1.4.0] - 2026-02-14
+
+### Added
+- Optional `ARVIO Cloud` account connection in Settings for syncing profiles, addons, catalogs, and IPTV settings.
+- Supabase migration and edge functions for TV device auth flow: `tv-auth-start`, `tv-auth-status`, `tv-auth-complete`.
+
+### Fixed
+- Trakt connect now displays activation URL and code while authorization is pending.
+- Cloud sign-in/sign-up modal D-pad navigation (Down/Up/Left/Right) is now consistent on Android TV remotes.
+
 ## [1.3.0] - 2026-02-11
 
 ### Added

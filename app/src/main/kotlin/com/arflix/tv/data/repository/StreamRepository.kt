@@ -229,6 +229,27 @@ class StreamRepository @Inject constructor(
         saveAddons(addons)
     }
 
+    suspend fun replaceAddonsFromCloud(addons: List<Addon>) {
+        val sanitized = addons.toMutableList()
+        val hasOpenSubs = sanitized.any { it.id == "opensubtitles" && it.type == AddonType.SUBTITLE }
+        if (!hasOpenSubs) {
+            sanitized.add(
+                Addon(
+                    id = "opensubtitles",
+                    name = "OpenSubtitles v3",
+                    version = "1.0.0",
+                    description = "Subtitles from OpenSubtitles",
+                    isInstalled = true,
+                    isEnabled = true,
+                    type = AddonType.SUBTITLE,
+                    url = "https://opensubtitles-v3.strem.io/subtitles",
+                    transportUrl = "https://opensubtitles-v3.strem.io/subtitles"
+                )
+            )
+        }
+        saveAddons(sanitized.distinctBy { it.id })
+    }
+
     private suspend fun saveAddons(addons: List<Addon>) {
         val json = gson.toJson(addons)
 

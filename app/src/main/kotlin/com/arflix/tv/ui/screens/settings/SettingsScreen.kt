@@ -148,7 +148,7 @@ fun SettingsScreen(
                 1 -> 2 // IPTV: configure + refresh + delete
                 2 -> uiState.catalogs.size // Catalogs: add + list rows
                 3 -> uiState.addons.size // Addons + add button
-                4 -> 1 // Accounts: 2 rows
+                4 -> 2 // Accounts: Cloud + Trakt + switch profile
                 else -> 0
             }.coerceAtLeast(0)
 
@@ -169,6 +169,16 @@ fun SettingsScreen(
         }
     }
 
+    var cloudDialogEmail by remember { mutableStateOf("") }
+    var cloudDialogPassword by remember { mutableStateOf("") }
+
+    LaunchedEffect(uiState.showCloudEmailPasswordDialog) {
+        if (uiState.showCloudEmailPasswordDialog) {
+            cloudDialogEmail = ""
+            cloudDialogPassword = ""
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -176,8 +186,8 @@ fun SettingsScreen(
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
-                // BLOCKER FIX: Ignore main screen navigation if modals are open
-                if (showCustomAddonInput || showSubtitlePicker || showIptvInput || showCatalogInput) return@onPreviewKeyEvent false
+                    // BLOCKER FIX: Ignore main screen navigation if modals are open
+                    if (showCustomAddonInput || showSubtitlePicker || showIptvInput || showCatalogInput || uiState.showCloudEmailPasswordDialog) return@onPreviewKeyEvent false
 
                 if (event.type == KeyEventType.KeyDown) {
                     val currentSection = sections.getOrNull(sectionIndex).orEmpty()
@@ -276,7 +286,7 @@ fun SettingsScreen(
                                         1 -> 2 // IPTV: Configure + Refresh + Delete
                                         2 -> uiState.catalogs.size // Catalogs: Add + N catalogs
                                         3 -> uiState.addons.size // Addons: N addons + "Add Custom" button
-                                        4 -> 1 // Accounts: 2 items (Trakt + Switch Profile)
+                                        4 -> 2 // Accounts: Cloud + Trakt + Switch Profile
                                         else -> 0
                                     }
                                     if (contentFocusIndex < maxIndex) {
@@ -362,14 +372,23 @@ fun SettingsScreen(
                                         }
                                         4 -> { // Accounts
                                             when (contentFocusIndex) {
-                                                0 -> { // Trakt
+                                                0 -> { // Cloud account
+                                                    if (uiState.isLoggedIn) {
+                                                        viewModel.logout()
+                                                    } else {
+                                                        viewModel.startCloudAuth()
+                                                    }
+                                                }
+                                                1 -> { // Trakt
                                                     if (uiState.isTraktAuthenticated) {
                                                         viewModel.disconnectTrakt()
-                                                    } else if (!uiState.isTraktPolling) {
+                                                    } else if (uiState.isTraktPolling) {
+                                                        viewModel.cancelTraktAuth()
+                                                    } else {
                                                         viewModel.startTraktAuth()
                                                     }
                                                 }
-                                                1 -> { // Switch Profile
+                                                2 -> { // Switch Profile
                                                     onSwitchProfile()
                                                 }
                                             }
@@ -431,7 +450,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.weight(1f))
                 
                 Text(
-                    text = "ARVIO V1.2",
+                    text = "ARVIO V1.4",
                     style = ArflixTypography.caption,
                     color = TextSecondary.copy(alpha = 0.5f),
                     modifier = Modifier.padding(start = 16.dp)
@@ -480,12 +499,18 @@ fun SettingsScreen(
                         onAddCustomAddon = { /* TODO: Show input modal */ }
                     )
                     "accounts" -> AccountsSettings(
+                        isCloudAuthenticated = uiState.isLoggedIn,
+                        cloudEmail = uiState.accountEmail,
+                        cloudHint = null,
                         isTraktAuthenticated = uiState.isTraktAuthenticated,
                         traktCode = uiState.traktCode?.userCode,
                         traktUrl = uiState.traktCode?.verificationUrl,
                         isTraktPolling = uiState.isTraktPolling,
                         focusedIndex = if (activeZone == Zone.CONTENT) contentFocusIndex else -1,
+                        onConnectCloud = { viewModel.startCloudAuth() },
+                        onDisconnectCloud = { viewModel.logout() },
                         onConnectTrakt = { viewModel.startTraktAuth() },
+                        onCancelTrakt = { viewModel.cancelTraktAuth() },
                         onDisconnectTrakt = { viewModel.disconnectTrakt() },
                         onSwitchProfile = onSwitchProfile
                     )
@@ -565,6 +590,18 @@ fun SettingsScreen(
             )
         }
 
+        if (uiState.showCloudEmailPasswordDialog) {
+            CloudEmailPasswordModal(
+                email = cloudDialogEmail,
+                password = cloudDialogPassword,
+                onEmailChange = { cloudDialogEmail = it },
+                onPasswordChange = { cloudDialogPassword = it },
+                onDismiss = { viewModel.closeCloudEmailPasswordDialog() },
+                onSignIn = { viewModel.completeCloudAuthWithEmailPassword(cloudDialogEmail, cloudDialogPassword, createAccount = false) },
+                onCreateAccount = { viewModel.completeCloudAuthWithEmailPassword(cloudDialogEmail, cloudDialogPassword, createAccount = true) }
+            )
+        }
+
         // Toast notification
         uiState.toastMessage?.let { message ->
             Toast(
@@ -576,6 +613,256 @@ fun SettingsScreen(
                 },
                 isVisible = true,
                 onDismiss = { viewModel.dismissToast() }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun CloudEmailPasswordModal(
+    email: String,
+    password: String,
+    onEmailChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onSignIn: () -> Unit,
+    onCreateAccount: () -> Unit
+) {
+    // Focus order: 0 email, 1 password, 2 cancel, 3 sign in, 4 create
+    var focusedIndex by remember { mutableIntStateOf(0) }
+    val emailRequester = remember { FocusRequester() }
+    val passwordRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) { emailRequester.requestFocus() }
+    LaunchedEffect(focusedIndex) {
+        when (focusedIndex) {
+            0 -> emailRequester.requestFocus()
+            1 -> passwordRequester.requestFocus()
+        }
+    }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .width(600.dp)
+                .background(BackgroundElevated, RoundedCornerShape(16.dp))
+                .padding(32.dp)
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown) {
+                        when (event.key) {
+                            Key.Back, Key.Escape -> {
+                                onDismiss()
+                                true
+                            }
+                            Key.DirectionUp -> {
+                                focusedIndex = when (focusedIndex) {
+                                    1 -> 0
+                                    2, 3, 4 -> 1
+                                    else -> focusedIndex
+                                }
+                                true
+                            }
+                            Key.DirectionDown -> {
+                                focusedIndex = when (focusedIndex) {
+                                    0 -> 1
+                                    1 -> 3 // Move to primary action; avoid "Down moves right" feeling.
+                                    else -> focusedIndex
+                                }
+                                true
+                            }
+                            Key.DirectionLeft -> {
+                                focusedIndex = when (focusedIndex) {
+                                    4 -> 3
+                                    3 -> 2
+                                    else -> focusedIndex
+                                }
+                                true
+                            }
+                            Key.DirectionRight -> {
+                                focusedIndex = when (focusedIndex) {
+                                    2 -> 3
+                                    3 -> 4
+                                    else -> focusedIndex
+                                }
+                                true
+                            }
+                            Key.Enter, Key.DirectionCenter -> {
+                                when (focusedIndex) {
+                                    2 -> { onDismiss(); true }
+                                    3 -> { onSignIn(); true }
+                                    4 -> { onCreateAccount(); true }
+                                    else -> false
+                                }
+                            }
+                            else -> false
+                        }
+                    } else false
+                },
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "ARVIO Cloud Sign-in",
+                style = ArflixTypography.sectionTitle,
+                color = TextPrimary,
+                modifier = Modifier.padding(bottom = 24.dp)
+            )
+
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Email",
+                    style = ArflixTypography.caption,
+                    color = if (focusedIndex == 0) Pink else TextSecondary,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                androidx.compose.material3.TextField(
+                    value = email,
+                    onValueChange = onEmailChange,
+                    singleLine = true,
+                    textStyle = ArflixTypography.body.copy(color = TextPrimary),
+                    colors = androidx.compose.material3.TextFieldDefaults.colors(
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedContainerColor = Color.White.copy(alpha = 0.1f),
+                        unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
+                        focusedIndicatorColor = Pink,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        cursorColor = Pink
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(emailRequester)
+                        .border(
+                            width = if (focusedIndex == 0) 2.dp else 1.dp,
+                            color = if (focusedIndex == 0) Pink else Color.White.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Password",
+                    style = ArflixTypography.caption,
+                    color = if (focusedIndex == 1) Pink else TextSecondary,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                androidx.compose.material3.TextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    textStyle = ArflixTypography.body.copy(color = TextPrimary),
+                    colors = androidx.compose.material3.TextFieldDefaults.colors(
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedContainerColor = Color.White.copy(alpha = 0.1f),
+                        unfocusedContainerColor = Color.White.copy(alpha = 0.05f),
+                        focusedIndicatorColor = Pink,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        cursorColor = Pink
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(passwordRequester)
+                        .border(
+                            width = if (focusedIndex == 1) 2.dp else 1.dp,
+                            color = if (focusedIndex == 1) Pink else Color.White.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                val isCancelFocused = focusedIndex == 2
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(
+                            color = if (isCancelFocused) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .border(
+                            width = if (isCancelFocused) 2.dp else 0.dp,
+                            color = if (isCancelFocused) Pink else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .padding(vertical = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Cancel",
+                        style = ArflixTypography.button,
+                        color = if (isCancelFocused) TextPrimary else TextSecondary
+                    )
+                }
+
+                val isSignInFocused = focusedIndex == 3
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(
+                            color = if (isSignInFocused) SuccessGreen else Pink.copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .border(
+                            width = if (isSignInFocused) 2.dp else 0.dp,
+                            color = if (isSignInFocused) SuccessGreen.copy(alpha = 0.5f) else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .padding(vertical = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Sign In",
+                        style = ArflixTypography.button,
+                        color = Color.White
+                    )
+                }
+
+                val isCreateFocused = focusedIndex == 4
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(
+                            color = if (isCreateFocused) SuccessGreen else Color.White.copy(alpha = 0.08f),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .border(
+                            width = if (isCreateFocused) 2.dp else 0.dp,
+                            color = if (isCreateFocused) SuccessGreen.copy(alpha = 0.5f) else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .padding(vertical = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Create",
+                        style = ArflixTypography.button,
+                        color = Color.White
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Tip: Use TV keyboard. D-pad to navigate.",
+                style = ArflixTypography.caption,
+                color = TextSecondary.copy(alpha = 0.5f)
             )
         }
     }
@@ -1221,12 +1508,18 @@ private fun AddonRow(
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun AccountsSettings(
+    isCloudAuthenticated: Boolean,
+    cloudEmail: String?,
+    cloudHint: String?,
     isTraktAuthenticated: Boolean,
     traktCode: String?,
     traktUrl: String?,
     isTraktPolling: Boolean,
     focusedIndex: Int,
+    onConnectCloud: () -> Unit,
+    onDisconnectCloud: () -> Unit,
     onConnectTrakt: () -> Unit,
+    onCancelTrakt: () -> Unit,
     onDisconnectTrakt: () -> Unit,
     onSwitchProfile: () -> Unit
 ) {
@@ -1238,6 +1531,23 @@ private fun AccountsSettings(
             modifier = Modifier.padding(bottom = 24.dp)
         )
 
+        AccountRow(
+            name = "ARVIO Cloud",
+            description = cloudEmail ?: "Optional account for syncing profiles, addons, catalogs and IPTV settings",
+            isConnected = isCloudAuthenticated,
+            isPolling = false,
+            authCode = null,
+            authUrl = null,
+            isFocused = focusedIndex == 0,
+            onConnect = {
+                onConnectCloud()
+            },
+            onDisconnect = onDisconnectCloud,
+            expirationText = cloudHint
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Trakt.tv
         AccountRow(
             name = "Trakt.tv",
@@ -1246,8 +1556,8 @@ private fun AccountsSettings(
             isPolling = isTraktPolling,
             authCode = traktCode,
             authUrl = traktUrl,
-            isFocused = focusedIndex == 0,
-            onConnect = onConnectTrakt,
+            isFocused = focusedIndex == 1,
+            onConnect = { if (isTraktPolling) onCancelTrakt() else onConnectTrakt() },
             onDisconnect = onDisconnectTrakt,
             expirationText = null  // Don't show expiration - Trakt tokens auto-refresh
         )
@@ -1259,7 +1569,7 @@ private fun AccountsSettings(
             title = "Switch Profile",
             description = "Change to a different user profile",
             actionLabel = "SWITCH",
-            isFocused = focusedIndex == 1,
+            isFocused = focusedIndex == 2,
             onClick = onSwitchProfile
         )
     }
@@ -1403,6 +1713,7 @@ private fun AccountRow(
     isFocused: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    secondaryActionLabel: String? = null,
     expirationText: String? = null
 ) {
     Column(
@@ -1497,51 +1808,45 @@ private fun AccountRow(
         }
 
         // Show auth code when polling
-        if (isPolling && authCode != null && authUrl != null) {
-            Spacer(modifier = Modifier.height(16.dp))
+        if (!isConnected && isPolling && !authCode.isNullOrBlank() && !authUrl.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Go to:",
-                    style = ArflixTypography.caption,
-                    color = TextSecondary
-                )
-                Text(
-                    text = authUrl,
-                    style = ArflixTypography.body,
-                    color = Pink
-                )
+            Text(
+                text = "Go to: $authUrl",
+                style = ArflixTypography.caption,
+                color = TextSecondary.copy(alpha = 0.9f)
+            )
 
-                Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "Enter code:",
                     style = ArflixTypography.caption,
-                    color = TextSecondary
+                    color = TextSecondary.copy(alpha = 0.9f)
                 )
-                Text(
-                    text = authCode,
-                    style = ArflixTypography.sectionTitle,
-                    color = TextPrimary,
+                Spacer(modifier = Modifier.width(10.dp))
+                Box(
                     modifier = Modifier
-                        .background(Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 24.dp, vertical = 8.dp)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = "Waiting for authorization...",
-                    style = ArflixTypography.caption,
-                    color = TextSecondary.copy(alpha = 0.5f)
-                )
+                        .background(Pink.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
+                        .border(1.dp, Pink.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = authCode,
+                        style = ArflixTypography.label,
+                        color = Pink
+                    )
+                }
             }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "Waiting for authorization... (Press OK to cancel)",
+                style = ArflixTypography.caption,
+                color = TextSecondary.copy(alpha = 0.7f)
+            )
         }
     }
 }

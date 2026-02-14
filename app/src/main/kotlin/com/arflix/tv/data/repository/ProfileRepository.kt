@@ -12,12 +12,15 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ProfileRepository @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val authRepository: AuthRepository
 ) {
     private val gson = Gson()
 
@@ -100,6 +103,7 @@ class ProfileRepository @Inject constructor(
             currentList.add(profile)
             prefs[PROFILES_KEY] = gson.toJson(currentList)
         }
+        pushProfilesStateToCloud()
 
         return profile
     }
@@ -116,6 +120,7 @@ class ProfileRepository @Inject constructor(
                 prefs[PROFILES_KEY] = gson.toJson(currentList)
             }
         }
+        pushProfilesStateToCloud()
     }
 
     /**
@@ -132,6 +137,7 @@ class ProfileRepository @Inject constructor(
                 prefs.remove(ACTIVE_PROFILE_KEY)
             }
         }
+        pushProfilesStateToCloud()
     }
 
     /**
@@ -149,6 +155,7 @@ class ProfileRepository @Inject constructor(
                 prefs[PROFILES_KEY] = gson.toJson(currentList)
             }
         }
+        pushProfilesStateToCloud()
     }
 
     /**
@@ -158,6 +165,38 @@ class ProfileRepository @Inject constructor(
         context.profilesDataStore.edit { prefs ->
             prefs.remove(ACTIVE_PROFILE_KEY)
         }
+        pushProfilesStateToCloud()
+    }
+
+    suspend fun replaceProfilesFromCloud(
+        profiles: List<Profile>,
+        activeProfileId: String?
+    ) {
+        context.profilesDataStore.edit { prefs ->
+            prefs[PROFILES_KEY] = gson.toJson(profiles)
+            if (!activeProfileId.isNullOrBlank() && profiles.any { it.id == activeProfileId }) {
+                prefs[ACTIVE_PROFILE_KEY] = activeProfileId
+            } else if (profiles.isNotEmpty()) {
+                prefs[ACTIVE_PROFILE_KEY] = profiles.first().id
+            } else {
+                prefs.remove(ACTIVE_PROFILE_KEY)
+            }
+        }
+        pushProfilesStateToCloud()
+    }
+
+    private suspend fun pushProfilesStateToCloud() {
+        val userId = authRepository.getCurrentUserId() ?: return
+        val profiles = getProfiles()
+        val activeProfileId = getActiveProfileId()
+        val existingPayload = authRepository.loadAccountSyncPayload().getOrNull().orEmpty()
+        val root = if (existingPayload.isBlank()) JSONObject() else runCatching { JSONObject(existingPayload) }.getOrElse { JSONObject() }
+        root.put("version", root.optInt("version", 1))
+        root.put("updatedAt", System.currentTimeMillis())
+        root.put("activeProfileId", activeProfileId ?: JSONObject.NULL)
+        root.put("profiles", JSONArray(gson.toJson(profiles)))
+        root.put("userId", userId)
+        authRepository.saveAccountSyncPayload(root.toString())
     }
 
     /**

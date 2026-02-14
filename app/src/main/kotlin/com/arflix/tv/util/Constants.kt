@@ -16,6 +16,9 @@ object Constants {
     // Edge Function Proxies - API keys are kept secure on server
     val TMDB_PROXY_URL: String get() = "${SUPABASE_URL}/functions/v1/tmdb-proxy"
     val TRAKT_PROXY_URL: String get() = "${SUPABASE_URL}/functions/v1/trakt-proxy"
+    val TV_AUTH_START_URL: String get() = "${SUPABASE_URL}/functions/v1/tv-auth-start"
+    val TV_AUTH_STATUS_URL: String get() = "${SUPABASE_URL}/functions/v1/tv-auth-status"
+    val TV_AUTH_COMPLETE_URL: String get() = "${SUPABASE_URL}/functions/v1/tv-auth-complete"
 
     // API Base URLs - requests are intercepted and routed through proxy
     const val TMDB_BASE_URL = "https://api.themoviedb.org/3/"

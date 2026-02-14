@@ -10,6 +10,7 @@ A media hub application for Android TV with a modern, beautiful interface. Brows
 
 - **Live TV (IPTV)** - M3U playlist support with group navigation and mini-player
 - **Catalog Management** - Built-in + custom Trakt/MDBList catalogs with ordering controls
+- **ARVIO Cloud (Optional)** - QR sign-in with cloud sync for profiles, addons, catalogs and IPTV config
 - **Stremio Addon Support** - Connect your favorite addons
 - **Media Browser** - Browse and discover content with TMDB metadata
 - **Beautiful UI** - Modern horizontal row browsing optimized for D-pad/remote
@@ -52,6 +53,21 @@ Powered by **ExoPlayer (Media3)** with **FFmpeg extension** for broad codec supp
 
 ### Direct Download
 [Download APK](https://github.com/ProdigyV21/ARVIO/releases/latest) from the Releases page.
+
+## Supabase Setup (Cloud Account Sync)
+
+Cloud sign-in/sync uses Supabase Edge Functions and one DB migration.
+
+1. Apply migration:
+`supabase/migrations/20260211_tv_auth_and_account_sync.sql`
+2. Deploy functions:
+`supabase/functions/tv-auth-start`
+`supabase/functions/tv-auth-status`
+`supabase/functions/tv-auth-complete`
+3. Configure function secrets:
+`SUPABASE_URL`
+`SUPABASE_SERVICE_ROLE_KEY`
+`APP_ANON_KEY` (same value as app `SUPABASE_ANON_KEY`)
 
 ## Support
 

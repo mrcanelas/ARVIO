@@ -119,6 +119,8 @@ jacoco/
 .tmp_supabase/
 supabase/.branches/
 supabase/.temp/
+supabase/static/
+supabase/functions/tv-auth-web/
 
 # Screenshots and debug images
 *.png

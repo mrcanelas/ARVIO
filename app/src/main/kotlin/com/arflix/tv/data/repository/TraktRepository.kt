@@ -37,6 +37,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -101,6 +102,12 @@ class TraktRepository @Inject constructor(
     private fun continueWatchingCacheKey() = profileManager.profileStringKey("trakt_continue_watching_cache_v1")
     // Local Continue Watching for profiles without Trakt - stores progress locally per profile
     private fun localContinueWatchingKey() = profileManager.profileStringKey("local_continue_watching_v1")
+
+    data class CloudTraktToken(
+        val accessToken: String,
+        val refreshToken: String?,
+        val expiresAt: Long?
+    )
 
     private var attemptedProfileTokenLoad = false
     @Volatile private var cachedContinueWatching: List<ContinueWatchingItem> = emptyList()
@@ -267,6 +274,35 @@ class TraktRepository @Inject constructor(
             prefs.remove(accessTokenKey())
             prefs.remove(refreshTokenKey())
             prefs.remove(expiresAtKey())
+        }
+    }
+
+    /**
+     * Export Trakt tokens for multiple profiles (for cloud backup).
+     */
+    suspend fun exportTokensForProfiles(profileIds: List<String>): Map<String, CloudTraktToken> {
+        val prefs = context.traktDataStore.data.first()
+        val out = LinkedHashMap<String, CloudTraktToken>()
+        profileIds.forEach { profileId ->
+            val access = prefs[profileManager.profileStringKeyFor(profileId, "trakt_access_token")] ?: return@forEach
+            val refresh = prefs[profileManager.profileStringKeyFor(profileId, "trakt_refresh_token")]
+            val expiresAt = prefs[profileManager.profileLongKeyFor(profileId, "trakt_expires_at")]
+            out[profileId] = CloudTraktToken(accessToken = access, refreshToken = refresh, expiresAt = expiresAt)
+        }
+        return out
+    }
+
+    /**
+     * Import Trakt tokens for multiple profiles (for cloud restore).
+     */
+    suspend fun importTokensForProfiles(tokens: Map<String, CloudTraktToken>) {
+        if (tokens.isEmpty()) return
+        context.traktDataStore.edit { prefs ->
+            tokens.forEach { (profileId, token) ->
+                prefs[profileManager.profileStringKeyFor(profileId, "trakt_access_token")] = token.accessToken
+                token.refreshToken?.let { prefs[profileManager.profileStringKeyFor(profileId, "trakt_refresh_token")] = it }
+                token.expiresAt?.let { prefs[profileManager.profileLongKeyFor(profileId, "trakt_expires_at")] = it }
+            }
         }
     }
 

@@ -67,6 +67,13 @@ data class UserProfile(
     val updated_at: String? = null
 )
 
+@Serializable
+private data class AccountSyncStateRow(
+    val user_id: String,
+    val payload: String? = null,
+    val updated_at: String? = null
+)
+
 /**
  * Authentication state
  */
@@ -314,6 +321,43 @@ class AuthRepository @Inject constructor(
         } catch (e: Exception) {
             AppLogger.e(TAG, "Sign up error", e)
             val message = safeErrorMessage(e, "Sign up failed")
+            _authState.value = AuthState.Error(message)
+            Result.failure(Exception(message))
+        }
+    }
+
+    /**
+     * Sign in by importing Supabase access/refresh tokens obtained from device auth flow.
+     */
+    suspend fun signInWithSessionTokens(
+        accessToken: String,
+        refreshToken: String
+    ): Result<Unit> {
+        AppLogger.d(TAG, "=== signInWithSessionTokens started ===")
+        return try {
+            _authState.value = AuthState.Loading
+            val session = withContext(Dispatchers.Main) {
+                supabase.auth.importAuthToken(accessToken, refreshToken, false, true)
+                supabase.auth.currentSessionOrNull()
+            }
+            val user = session?.user
+            if (session != null && user != null) {
+                storeSession(session)
+                var profile = loadUserProfile(user.id)
+                if (profile == null) {
+                    profile = createDefaultProfile(user.id, user.email ?: "")
+                }
+                _userProfile.value = profile
+                _authState.value = AuthState.Authenticated(user.id, user.email ?: "", profile)
+                AppLogger.d(TAG, "=== Token sign-in complete: ${user.email?.sanitizeEmail()} ===")
+                Result.success(Unit)
+            } else {
+                _authState.value = AuthState.Error("Failed to import auth session")
+                Result.failure(Exception("Failed to import auth session"))
+            }
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Token sign-in error", e)
+            val message = safeErrorMessage(e, "Sign in failed")
             _authState.value = AuthState.Error(message)
             Result.failure(Exception(message))
         }
@@ -776,6 +820,42 @@ class AuthRepository @Inject constructor(
             Result.success(Unit)
         } catch (e: Exception) {
             AppLogger.e(TAG, "Error saving auto play next to Supabase", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun loadAccountSyncPayload(): Result<String?> {
+        val userId = getCurrentUserId() ?: return Result.failure(Exception("Not logged in"))
+        return try {
+            ensureValidSession()
+            val row = supabase.postgrest
+                .from("account_sync_state")
+                .select {
+                    filter { eq("user_id", userId) }
+                }
+                .decodeSingleOrNull<AccountSyncStateRow>()
+            Result.success(row?.payload)
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Error loading account sync payload", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveAccountSyncPayload(payload: String): Result<Unit> {
+        val userId = getCurrentUserId() ?: return Result.failure(Exception("Not logged in"))
+        return try {
+            ensureValidSession()
+            supabase.postgrest
+                .from("account_sync_state")
+                .upsert(
+                    mapOf(
+                        "user_id" to userId,
+                        "payload" to payload
+                    )
+                )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            AppLogger.e(TAG, "Error saving account sync payload", e)
             Result.failure(e)
         }
     }

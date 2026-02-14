@@ -87,6 +87,14 @@ class ProfileManager @Inject constructor(
     }
 
     /**
+     * Create a profile-scoped string preference key for a specific profile ID
+     * (does not mutate current profile state).
+     */
+    fun profileStringKeyFor(profileId: String, name: String): Preferences.Key<String> {
+        return stringPreferencesKey("profile_${profileId}_$name")
+    }
+
+    /**
      * Create a profile-scoped long preference key
      */
     fun profileLongKey(name: String): Preferences.Key<Long> {
@@ -94,10 +102,26 @@ class ProfileManager @Inject constructor(
     }
 
     /**
+     * Create a profile-scoped long preference key for a specific profile ID
+     * (does not mutate current profile state).
+     */
+    fun profileLongKeyFor(profileId: String, name: String): Preferences.Key<Long> {
+        return longPreferencesKey("profile_${profileId}_$name")
+    }
+
+    /**
      * Create a profile-scoped boolean preference key
      */
     fun profileBooleanKey(name: String): Preferences.Key<Boolean> {
         return booleanPreferencesKey("profile_${getProfileIdSync()}_$name")
+    }
+
+    /**
+     * Create a profile-scoped boolean preference key for a specific profile ID
+     * (does not mutate current profile state).
+     */
+    fun profileBooleanKeyFor(profileId: String, name: String): Preferences.Key<Boolean> {
+        return booleanPreferencesKey("profile_${profileId}_$name")
     }
 
     /**

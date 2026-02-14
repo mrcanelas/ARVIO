@@ -307,16 +307,23 @@ fun ArflixApp(
     val navController = rememberNavController()
     val authState by authRepository.authState.collectAsState()
     val activeProfile by profileRepository.activeProfile.collectAsState(initial = null)
-    var addonsSynced by remember { mutableStateOf(false) }
+    var lastAddonsSyncKey by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(authState) {
-        if (authState is AuthState.Authenticated && !addonsSynced) {
-            withContext(Dispatchers.IO) {
-                streamRepository.syncAddonsFromCloud()
+    LaunchedEffect(authState, activeProfile?.id) {
+        val authed = authState as? AuthState.Authenticated
+        val profileId = activeProfile?.id
+        if (authed != null && !profileId.isNullOrBlank()) {
+            // Addons are stored per local profile, but synced to Supabase per account.
+            // Ensure every profile gets the account's addon set so streaming sources are available after profile switches.
+            val key = "${authed.userId}:$profileId"
+            if (lastAddonsSyncKey != key) {
+                lastAddonsSyncKey = key
+                withContext(Dispatchers.IO) {
+                    streamRepository.syncAddonsFromCloud()
+                }
             }
-            addonsSynced = true
         } else if (authState is AuthState.NotAuthenticated) {
-            addonsSynced = false
+            lastAddonsSyncKey = null
         }
     }
 
